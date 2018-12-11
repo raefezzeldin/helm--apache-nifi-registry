@@ -1,0 +1,41 @@
+{{- if .Values.persistence.enabled }}
+{{- if .Values.persistence.nifiSingleDisk }}
+{{- if .Values.persistence.nifiSingleDisk.enabled }}
+{{- if .Values.persistence.nifiSingleDisk.azureFile }}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ template "nifireg.svcname" . }}--single--azfile-pv
+  labels:
+    app: {{ template "nifireg.fullname" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+
+    # we are forcing this to be static assignment based on a label...
+    hszName: {{ .Release.Name }}--azfile
+spec:
+  capacity:
+    storage: {{ .Values.persistence.nifiSingleDisk.storageSize |default "1Gi" }}
+  accessModes:
+    - ReadWriteMany
+  azureFile:
+    secretName:  {{ .Values.persistence.nifiSingleDisk.azureFile.secretName |quote }}
+    shareName: {{ .Values.persistence.nifiSingleDisk.azureFile.shareName |default (printf "%s-live" .Release.Name) |quote }}
+    readOnly: false
+  mountOptions:
+    # CIFS doesn't support noatime
+    # - noatime
+    - uid={{ .Values.redisUID |default "1000" }}
+    - gid={{ .Values.redisGID |default "1000" }}
+{{- if .Values.persistence.nifiSingleDisk.azureFile.mountOptions }}
+    {{- range $v := .Values.persistence.nifiSingleDisk.azureFile.mountOptions }}
+    - {{ $v }}
+    {{- end }}
+{{- end }}
+
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

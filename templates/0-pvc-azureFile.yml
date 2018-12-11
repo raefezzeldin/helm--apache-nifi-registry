@@ -1,0 +1,30 @@
+{{- if .Values.persistence.enabled }}
+{{- if .Values.persistence.nifiSingleDisk }}
+{{- if .Values.persistence.nifiSingleDisk.enabled }}
+{{- if .Values.persistence.nifiSingleDisk.azureFile }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ template "nifireg.svcname" . }}--single--azfile-pvc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ template "nifireg.fullname" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: "{{ .Values.persistence.nifiSingleDisk.azureFile.storageClass |default "" }}"
+  selector:
+    matchLabels:
+      # we are forcing this to be static assignment based on a label...
+      hszName: {{ .Release.Name }}--azfile
+  resources:
+    requests:
+      storage: {{ .Values.azureFile_size |default "1Gi" }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

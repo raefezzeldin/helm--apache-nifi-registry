@@ -1,0 +1,61 @@
+---
+
+image:
+  #repository: "apache/nifi-registry"
+  repository: "ez123/apache-nifi-registry"
+  tag:        "0.3.0"
+
+## Kubernetes configuration
+## For minikube, set this to NodePort, elsewhere use LoadBalancer
+## Use ClusterIP if your setup includes ingress controller
+##
+serviceType: LoadBalancer
+
+ingress:
+  enabled: false
+
+  auth:
+    enabled: false
+    mode:    "basic"
+    # basic_secret: "some-secret-name"
+  host:
+    - external-url-here.domain.tld
+
+  # annotations:
+  #   kubernetes.io/ingress.class: "ingress-class-here-unless-is-nginx"
+  #
+  #   kubernetes.io/tls-acme:             "true"
+  #   certmanager.k8s.io/cluster-issuer:  "tls-issuer-name-here"
+  #   ingress.kubernetes.io/ssl-redirect: "true"
+  #
+  #   nginx.ingress.kubernetes.io/proxy-body-size: 256m
+
+nifi_access_internal: true
+
+persistence:
+  enabled: true
+
+  nifiSingleDisk:
+    enabled: true
+    storageSize: 4Gi
+
+    # # choose one and only one of the following (azureFile wins if both are defined)
+
+    # dynamic:
+    #   storageClass: default
+
+    # azureFile:
+    #   secretName: azfiles--nifireg
+    #   # shareName: nifireg
+    #
+
+flow_persistence:
+  # https://dzone.com/articles/quick-tip-using-git-with-nifi-registry-in-docker
+  mode: "git"
+  git:
+    # repo_proto: "https://"
+    # repo_uri:   "gitlab.com/git-user/repo-name"
+    remote: origin
+    # secretName:
+    # # user:
+    # # pass:

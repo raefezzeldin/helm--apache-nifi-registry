@@ -1,0 +1,359 @@
+{{ $nifi_root := printf "%s%s" "/opt/nifi-registry/nifi-registry-" .Values.image.tag }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ template "nifireg.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ template "nifireg.fullname" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ template "nifireg.fullname" . }}
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ template "nifireg.fullname" . }}
+        release: {{ .Release.Name }}
+    spec:
+      dnsPolicy: {{ .Values.dnsPolicy |default "ClusterFirst" }}
+
+      initContainers:
+        - name: init-dirs
+          # image: busybox
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          command:
+            - /bin/bash
+            - -c
+            - |
+                set -x
+                set -e
+                echo '...0'
+                cd {{ $nifi_root }}
+                ls -la .
+                ls -la ./conf/
+                ls -la ./_live/
+                ls -la ./_live/conf/  || true
+                if [ "$(ls -A ./_live/conf)" ]; then
+                    echo './_live/conf does not seem to be empty... leaving it alone'
+                else
+                    echo './_live/conf seems to be empty... initializing it'
+                    cp -a ./conf/* ./_live/conf
+                    echo 'making sure the log files exist to prevent tail from complaining the 1st time this runs'
+                    touch ./logs/nifi-registry-app.log
+                    touch ./logs/nifi-registry-bootstrap.log
+                    touch ./logs/nifi-registry-event.log
+                fi
+                ls -la ./conf/
+                ls -la ./_live/conf/
+                echo 'done...0'
+          {{-   if .Values.flow_persistence.mode }}
+          {{-     if eq .Values.flow_persistence.mode "git" }}
+                echo '...1'
+                if [ "$(ls -A ./_live/flow_git || true)" ]; then
+                    echo './_live/flow_git does not seem to be empty... leaving it alone'
+                    pushd ./_live/flow_git
+                    echo 'But checking if we have a git repo or not... Aborting if not!'
+                    ls -la
+                    git remote --verbose
+                    popd
+                else
+                  ls -la
+                  if [ ! -d ./_live/flow_git ]; then
+                      echo './_live/flow_git does not exist... creating and initializing...'
+                      mkdir ./_live/flow_git
+                  fi
+
+                  echo './_live/flow_git seems to be empty... initializing it'
+                  pushd ./_live/flow_git
+                  ls -la
+                  if [ -z "${NIFIREG_GIT_REPO_PROTO}" -o -z "${NIFIREG_GIT_REPO_URI}" ]; then
+                    echo "WARNING >> !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+                    echo "WARNING >> !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+                    echo "WARNING >> "
+                    echo "WARNING >> Git folder is empty and we don have an URL to initialize it with!"
+                    echo "WARNING >> we will create an empty git repo, but you need to make sure an origin is defined for it"
+                    echo "WARNING >> "
+                    echo "WARNING >> !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+                    echo "WARNING >> !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+                    git init
+                  else
+                    # this only works for https://
+                    # if we need to support SSH, the user/pass format is different, as is the case with ssh key auth
+                    if [ -n "${NIFI_REGISTRY_GIT_USER}" -a -n "${NIFI_REGISTRY_GIT_PASSWORD}" ]; then
+                      NIFIREG_GIT_AUTH="${NIFI_REGISTRY_GIT_USER}:${NIFI_REGISTRY_GIT_PASSWORD}@"
+                    else
+                      if [ -z "${NIFI_REGISTRY_GIT_USER}" ]; then
+                        NIFIREG_GIT_AUTH="${NIFI_REGISTRY_GIT_USER}@"
+                      else
+                        if [ -z "${NIFI_REGISTRY_GIT_PASSWORD}" ]; then
+                          NIFIREG_GIT_AUTH="${NIFI_REGISTRY_GIT_PASSWORD}@"
+                        else
+                          NIFIREG_GIT_AUTH=""
+                        fi
+                      fi
+                    fi
+                    git clone -o "${NIFI_REGISTRY_GIT_REMOTE}" "${NIFIREG_GIT_REPO_PROTO}${NIFIREG_GIT_AUTH}${NIFIREG_GIT_REPO_URI}" .
+                  fi
+                  ls -la
+                  git remote --verbose
+                  popd
+                fi
+                echo 'done...1'
+          {{-     end }}
+          {{-   end }}
+
+          env:
+          {{- if .Values.persistence.enabled }}
+          {{-   if .Values.flow_persistence.mode }}
+          {{-     if eq .Values.flow_persistence.mode "git" }}
+          {{-       if .Values.flow_persistence.git.repo_uri }}
+            - { name: "NIFI_REGISTRY_GIT_REMOTE",       value: {{ .Values.flow_persistence.git.remote     |default "origin"     |quote }} }
+            - { name: "NIFIREG_GIT_REPO_PROTO",         value: {{ .Values.flow_persistence.git.repo_proto |quote }} }
+            - { name: "NIFIREG_GIT_REPO_URI",           value: {{ .Values.flow_persistence.git.repo_uri   |quote }} }
+          {{-       if .Values.flow_persistence.git.secretName }}
+            # using external secret
+            - { name: "NIFI_REGISTRY_GIT_USER",      valueFrom: { secretKeyRef: { name: {{ .Values.flow_persistence.git.secretName }}, key: "user" } } }
+            - { name: "NIFI_REGISTRY_GIT_PASSWORD",  valueFrom: { secretKeyRef: { name: {{ .Values.flow_persistence.git.secretName }}, key: "pass" } } }
+          {{-       else }}
+            # using external secret
+          {{-         if .Values.flow_persistence.git.user }}
+            - { name: "NIFI_REGISTRY_GIT_USER",      value: {{ .Values.flow_persistence.git.user |quote }} }
+          {{-         else }}
+            - { name: "NIFI_REGISTRY_GIT_USER",      valueFrom: { secretKeyRef: { name: {{ printf "%s--%s" .Release.Name "secrets-git" }}, key: user } } }
+          {{-         end }}
+          {{-         if .Values.flow_persistence.git.pass }}
+            - { name: "NIFI_REGISTRY_GIT_PASSWORD",  value: {{ .Values.flow_persistence.git.pass |quote }} }
+          {{-         else }}
+            - { name: "NIFI_REGISTRY_GIT_PASSWORD",  valueFrom: { secretKeyRef: { name: {{ printf "%s--%s" .Release.Name "secrets-git" }}, key: pass } } }
+          {{-         end }}
+          {{-       end }}
+          {{-       end }}
+          {{-     end }}
+          {{-   end }}
+          {{- end }}
+
+          volumeMounts:
+          {{- if .Values.persistence.enabled }}
+            # # persistence enabled...
+          {{- if and .Values.persistence.nifiSingleDisk .Values.persistence.nifiSingleDisk.enabled }}
+            # # persistence enabled, single disk
+            - { mountPath: {{ $nifi_root }}/_live/conf,         name: "nifireg-single", subPath: "nifireg/conf" }
+            - { mountPath: {{ $nifi_root }}/_live/database,     name: "nifireg-single", subPath: "nifireg/database" }
+            - { mountPath: {{ $nifi_root }}/_live/logs,         name: "nifireg-single", subPath: "nifireg/logs" }
+            - { mountPath: {{ $nifi_root }}/_live/flow_storage, name: "nifireg-single", subPath: "nifireg/flow_storage" }
+          {{-   if .Values.flow_persistence.mode }}
+          {{-     if eq .Values.flow_persistence.mode "git" }}
+            - { mountPath: {{ $nifi_root }}/_live/flow_git,     name: "nifireg-single", subPath: "nifireg/flow_git"     }
+          {{-     end }}
+          {{-   end }}
+          {{- else }}
+            # # persistence enabled, non single disk
+            # - name: "nifireg-conf"
+            #   ...
+            # - name: "nifireg-database"
+            #   ...
+            # - name: "nifireg-logs"
+            #   ...
+            # - name: "nifireg-flow_storage"
+            #   ...
+          {{-   if .Values.flow_persistence.mode }}
+          {{-     if eq .Values.flow_persistence.mode "git" }}
+            # - name: "nifireg-flow_git"
+            #   ...
+          {{-     end }}
+          {{-   end }}
+          {{- end }}
+          {{- else }}
+            # persistence disabled
+          {{- end }}
+
+      containers:
+
+        - name: web
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: Always
+          command:
+            - /bin/bash
+            - -c
+            - |
+                set -x
+                ls -la ${NIFI_REGISTRY_HOME}/conf/providers.xml  ||true
+                # ls -la "${NIFI_REGISTRY_BASE_DIR}/scripts/update_flow_provider.sh"  ||true
+                # echo "#!/bin/bash" >> "${NIFI_REGISTRY_BASE_DIR}/scripts/update_flow_provider.x.sh"
+                # echo "set -x" >> "${NIFI_REGISTRY_BASE_DIR}/scripts/update_flow_provider.x.sh"
+                # cat "${NIFI_REGISTRY_BASE_DIR}/scripts/update_flow_provider.sh" >> ${NIFI_REGISTRY_BASE_DIR}/scripts/update_flow_provider.x.sh
+                # rm "${NIFI_REGISTRY_BASE_DIR}/scripts/update_flow_provider.sh"
+                # mv "${NIFI_REGISTRY_BASE_DIR}/scripts/update_flow_provider.x.sh" "${NIFI_REGISTRY_BASE_DIR}/scripts/update_flow_provider.sh"
+                ls -la "${NIFI_REGISTRY_BASE_DIR}/scripts/update_flow_provider.sh"  ||true
+                ${NIFI_REGISTRY_BASE_DIR}/scripts/start.sh
+          env:
+            - { name: "NIFI_REGISTRY_WEB_HTTP_HOST", value: "{{ template "nifireg.svcname" . }}"   }
+
+            # - AUTH=
+            # # - AUTH=tls
+            # # - AUTH=ldap
+          {{- if nifi_access_internal }}
+            - { name: "NIFI_REGISTRY_WEB_HTTPS_HOST", value: {{ printf "%s.%s" (include "nifireg.svcname" .) {{ .Release.Namespace }} }
+          {{- else }}
+            - { name: "NIFI_REGISTRY_WEB_HTTPS_HOST", value: {{ .Values.ingress.host }} }
+          {{- end }}
+            # - NIFI_REGISTRY_WEB_HTTP_PORT=443
+            # # - NIFI_REGISTRY_WEB_HTTP_PORT=18080
+            #
+
+          {{- if .Values.flow_persistence }}
+          {{-   if .Values.flow_persistence.mode }}
+          {{-     if eq .Values.flow_persistence.mode "git" }}
+            - { name: "NIFI_REGISTRY_FLOW_PROVIDER",    value: "git" }
+            - { name: "NIFI_REGISTRY_GIT_REMOTE",       value: {{ .Values.flow_persistence.git.remote   |default "origin"     |quote }} }
+            - { name: "NIFI_REGISTRY_FLOW_STORAGE_DIR", value: {{ .Values.flow_persistence.git.flow_dir |default "./flow_git" |quote }} }
+          {{-       if .Values.flow_persistence.git.secretName }}
+            # using external secret
+            - { name: "NIFI_REGISTRY_GIT_USER",      valueFrom: { secretKeyRef: { name: {{ .Values.flow_persistence.git.secretName }}, key: "user" } } }
+            - { name: "NIFI_REGISTRY_GIT_PASSWORD",  valueFrom: { secretKeyRef: { name: {{ .Values.flow_persistence.git.secretName }}, key: "pass" } } }
+          {{-       else }}
+            # using external secret
+          {{-         if .Values.flow_persistence.git.user }}
+            - { name: "NIFI_REGISTRY_GIT_USER",      value: {{ .Values.flow_persistence.git.user |quote }} }
+          {{-         else }}
+            - { name: "NIFI_REGISTRY_GIT_USER",      valueFrom: { secretKeyRef: { name: {{ printf "%s--%s" .Release.Name "secrets-git" }}, key: user } } }
+          {{-         end }}
+          {{-         if .Values.flow_persistence.git.pass }}
+            - { name: "NIFI_REGISTRY_GIT_PASSWORD",  value: {{ .Values.flow_persistence.git.pass |quote }} }
+          {{-         else }}
+            - { name: "NIFI_REGISTRY_GIT_PASSWORD",  valueFrom: { secretKeyRef: { name: {{ printf "%s--%s" .Release.Name "secrets-git" }}, key: pass } } }
+          {{-         end }}
+          {{-       end }}
+          {{-     end }}
+          {{-   end }}
+          {{- end }}
+
+            #
+            # # - NIFI_REGISTRY_DB_URL=jdbc:h2:./database/nifi-registry-primary;AUTOCOMMIT=OFF;DB_CLOSE_ON_EXIT=FALSE;LOCK_MODE=3;LOCK_TIMEOUT=25000;WRITE_DELAY=0;AUTO_SERVER=FALSE
+            # # - NIFI_REGISTRY_DB_CLASS=org.h2.Driver
+            # # - NIFI_REGISTRY_DB_DIR=
+            # # - NIFI_REGISTRY_DB_USER=nifireg
+            # # - NIFI_REGISTRY_DB_PASS=nifireg
+            # # - NIFI_REGISTRY_DB_MAX_CONNS=5
+            # # - NIFI_REGISTRY_DB_DEBUG_SQL=false
+
+            # - KEYSTORE_PATH=
+            # - KEYSTORE_TYPE=
+            # - KEYSTORE_PASSWORD=
+            # - TRUSTSTORE_PATH=
+            # - TRUSTSTORE_TYPE=
+            # - TRUSTSTORE_PASSWORD=
+            # - INITIAL_ADMIN_IDENTITY=
+
+          ports:
+            - name: {{ .Values.portName |default "http" }}
+              containerPort: 18080
+
+          volumeMounts:
+          {{- if .Values.persistence.enabled }}
+            # # persistence enabled...
+          {{- if and .Values.persistence.nifiSingleDisk .Values.persistence.nifiSingleDisk.enabled }}
+            # # persistence enabled, single disk
+            - { mountPath: {{ $nifi_root }}/conf,         name: "nifireg-single", subPath: "nifireg/conf"         }
+            - { mountPath: {{ $nifi_root }}/database,     name: "nifireg-single", subPath: "nifireg/database"     }
+            - { mountPath: {{ $nifi_root }}/logs,         name: "nifireg-single", subPath: "nifireg/logs"         }
+            - { mountPath: {{ $nifi_root }}/flow_storage, name: "nifireg-single", subPath: "nifireg/flow_storage" }
+          {{-   if .Values.flow_persistence.mode }}
+          {{-     if eq .Values.flow_persistence.mode "git" }}
+            - { mountPath: {{ $nifi_root }}/flow_git,     name: "nifireg-single", subPath: "nifireg/flow_git"     }
+          {{-     end }}
+          {{-   end }}
+
+          {{- else }}
+            # # persistence enabled, non single disk
+            # - name: "nifireg-conf"
+            #   ...
+            # - name: "nifireg-database"
+            #   ...
+            # - name: "nifireg-logs"
+            #   ...
+            # - name: "nifireg-flow_storage"
+            #   ...
+          {{-   if .Values.flow_persistence.mode }}
+          {{-     if eq .Values.flow_persistence.mode "git" }}
+            # - name: "nifireg-flow_git"
+            #   ...
+          {{-     end }}
+          {{-   end }}
+          {{- end }}
+          {{- else }}
+            # persistence disabled
+          {{- end }}
+
+        - name: devops
+          image: {{ .Values.opsBaseDockerImage |default "ez123/ops-base:alpine38" }}
+          imagePullPolicy: Always
+          command: [ "/bin/bash" ]
+          args:    [ "-c", "while true; do date -u; sleep 900; done" ]
+          volumeMounts:
+          {{- if .Values.persistence.enabled }}
+            # # persistence enabled...
+          {{- if and .Values.persistence.nifiSingleDisk .Values.persistence.nifiSingleDisk.enabled }}
+            # # persistence enabled, single disk
+            - { mountPath: /mnt/nifireg-conf,         name: "nifireg-single", subPath: "nifireg/conf" }
+            - { mountPath: /mnt/nifireg-database,     name: "nifireg-single", subPath: "nifireg/database" }
+            - { mountPath: /mnt/nifireg-logs,         name: "nifireg-single", subPath: "nifireg/logs" }
+            - { mountPath: /mnt/nifireg-flow_storage, name: "nifireg-single", subPath: "nifireg/flow_storage" }
+          {{-   if .Values.flow_persistence.mode }}
+          {{-     if eq .Values.flow_persistence.mode "git" }}
+            - { mountPath: /mnt/nifireg-flow_git,     name: "nifireg-single", subPath: "nifireg/flow_git"     }
+          {{-     end }}
+          {{-   end }}
+          {{- else }}
+            # # persistence enabled, non single disk
+            # - name: "nifireg-conf"
+            #   ...
+            # - name: "nifireg-database"
+            #   ...
+            # - name: "nifireg-logs"
+            #   ...
+            # - name: "nifireg-flow_storage"
+            #   ...
+          {{-   if .Values.flow_persistence.mode }}
+          {{-     if eq .Values.flow_persistence.mode "git" }}
+            # - name: "nifireg-flow_git"
+            #   ...
+          {{-     end }}
+          {{-   end }}
+          {{- end }}
+          {{- else }}
+            # persistence disabled
+          {{- end }}
+
+      volumes:
+      {{- if .Values.persistence.enabled }}
+      {{- if and  .Values.persistence.nifiSingleDisk .Values.persistence.nifiSingleDisk.enabled }}
+        - name: "nifireg-single"
+          persistentVolumeClaim:
+      {{-   if .Values.persistence.nifiSingleDisk.azureFile }}
+            claimName: "{{ template "nifireg.svcname" . }}--single--azfile-pvc"
+      {{-   else if .Values.persistence.nifiSingleDisk.dynamic }}
+            claimName: "{{ template "nifireg.svcname" . }}--single--dyn-pvc"
+      {{-   else }}
+            claimName: "{{ template "nifireg.svcname" . }}--single--unknown-pvc"
+      {{-   end }}
+      {{- else }}
+        # # persistence enabled, non single disk
+        # - name: "nifireg-conf"
+        #   ...
+        # - name: "nifireg-database"
+        #   ...
+        # - name: "nifireg-logs"
+        #   ...
+        # - name: "nifireg-flow_storage"
+        #   ...
+      {{- end }}
+      {{- else }}
+        # persistence disabled
+      {{- end }}

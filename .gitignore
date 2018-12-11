@@ -1,0 +1,4 @@
+**/charts/*.gz
+**/charts/*.tgz
+scripts/tmp
+.DS_Store
