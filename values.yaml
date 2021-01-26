@@ -1,9 +1,9 @@
 ---
 
 image:
-  #repository: "apache/nifi-registry"
-  repository: "ez123/apache-nifi-registry"
-  tag:        "0.3.0"
+  repository: "apache/nifi-registry"
+  #repository: "ez123/apache-nifi-registry"
+  tag:        "latest"
 
 ## Kubernetes configuration
 ## For minikube, set this to NodePort, elsewhere use LoadBalancer
@@ -19,7 +19,7 @@ ingress:
     mode:    "basic"
     # basic_secret: "some-secret-name"
   host:
-    - external-url-here.domain.tld
+    - 172.30.0.102.xip.io
 
   # annotations:
   #   kubernetes.io/ingress.class: "ingress-class-here-unless-is-nginx"
